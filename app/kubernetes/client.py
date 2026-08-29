@@ -61,7 +61,8 @@ class KubernetesClient:
                 {
                     "name": pod.metadata.name,
                     "namespace": pod.metadata.namespace,
-                    "status": pod.status.phase,
+                    "status": self._get_pod_status(pod),
+                    "phase": pod.status.phase,
                     "restarts": sum(
                         c.restart_count or 0 for c in pod.status.container_statuses or []
                     ),
@@ -74,6 +75,21 @@ class KubernetesClient:
             ]
         except ApiException as exc:
             raise RuntimeError(f"Failed to list pods: {exc}") from exc
+
+    @staticmethod
+    def _get_pod_status(pod: object) -> str:
+        """Return a container failure reason before the broader pod phase."""
+        container_statuses = getattr(pod.status, "container_statuses", None) or []
+        for container in container_statuses:
+            waiting = getattr(getattr(container, "state", None), "waiting", None)
+            if waiting and getattr(waiting, "reason", None):
+                return waiting.reason
+
+            terminated = getattr(getattr(container, "state", None), "terminated", None)
+            if terminated and getattr(terminated, "reason", None):
+                return terminated.reason
+
+        return pod.status.phase
 
     def get_pod_logs(
         self, pod_name: str, namespace: str = "default", container: Optional[str] = None
@@ -130,7 +146,8 @@ class KubernetesClient:
             return {
                 "name": pod.metadata.name,
                 "namespace": pod.metadata.namespace,
-                "status": pod.status.phase,
+                "status": self._get_pod_status(pod),
+                "phase": pod.status.phase,
                 "conditions": conditions,
                 "container_statuses": container_statuses,
                 "node_name": pod.spec.node_name,

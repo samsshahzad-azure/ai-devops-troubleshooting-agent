@@ -1,8 +1,10 @@
 """Tests for Kubernetes integration."""
 
 import pytest
+from types import SimpleNamespace
 
 from app.kubernetes import KubernetesConnectionError, KubernetesReader
+from app.kubernetes.client import KubernetesClient
 
 
 def test_kubernetes_reader_handles_unavailable_cluster() -> None:
@@ -68,3 +70,29 @@ def test_collect_pod_information_uses_local_fixtures() -> None:
     
     assert info["pod"]["name"] == "checkout-api-7d8f9c6b5f-q2m4k"
     assert "logs" in info
+
+
+def test_pod_status_prioritizes_container_waiting_reason() -> None:
+    """A container failure reason is more actionable than the pod phase."""
+    pod = SimpleNamespace(
+        metadata=SimpleNamespace(name="broken-app-abc123", namespace="ai-agent-test"),
+        status=SimpleNamespace(
+            phase="Pending",
+            container_statuses=[SimpleNamespace(
+                restart_count=0,
+                state=SimpleNamespace(
+                    waiting=SimpleNamespace(reason="ImagePullBackOff"),
+                    terminated=None,
+                ),
+            )],
+            conditions=[],
+        ),
+        spec=SimpleNamespace(containers=[SimpleNamespace(name="broken-container")]),
+    )
+    client = KubernetesClient.__new__(KubernetesClient)
+    client.v1 = SimpleNamespace(list_namespaced_pod=lambda *args, **kwargs: SimpleNamespace(items=[pod]))
+
+    result = client.list_pods("ai-agent-test")
+
+    assert result[0]["status"] == "ImagePullBackOff"
+    assert result[0]["phase"] == "Pending"

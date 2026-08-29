@@ -118,6 +118,47 @@ def test_tool_call_passes_requested_namespace(monkeypatch):
     assert calls[0]["pod_name"] == "broken-app-abc123"
 
 
+def test_pending_phase_image_pull_reason_reaches_diagnosis(monkeypatch):
+    completions = SequencedCompletions([
+        SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+            content=None,
+            tool_calls=[tool_call("get_namespace_snapshot", {"namespace": "ai-agent-test"})],
+        ))]),
+        SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+            content=None,
+            tool_calls=[tool_call("submit_diagnosis", {
+                "status": "ImagePullBackOff",
+                "root_cause": "The container image cannot be pulled",
+                "recommendation": "Check the image name and registry access",
+            })],
+        ))]),
+    ])
+    configure_agent(monkeypatch, completions)
+    monkeypatch.setattr(
+        agent_module,
+        "collect_cluster_snapshot",
+        lambda **kwargs: {
+            "status": "success",
+            "namespace": "ai-agent-test",
+            "pods": [{
+                "name": "broken-app-abc123",
+                "status": "ImagePullBackOff",
+                "phase": "Pending",
+            }],
+            "deployments": [],
+            "services": [],
+            "events": [],
+        },
+    )
+
+    result = TroubleshootingAgent().investigate("Why is broken-app failing?")
+
+    assert result["status"] == "ImagePullBackOff"
+    conversation = json.dumps(completions.requests[1]["messages"])
+    assert "ImagePullBackOff" in conversation
+    assert "Pending" in conversation
+
+
 def test_tool_call_rejects_unknown_tool(monkeypatch):
     configure_agent(monkeypatch, SequencedCompletions([]))
     agent = TroubleshootingAgent()

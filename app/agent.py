@@ -254,6 +254,7 @@ class TroubleshootingAgent:
             for pod in pods[:10]:  # Show all if less than 10
                 context_parts.append(
                     f"  - NAME: {pod['name']}, STATUS: {pod.get('status')}, "
+                    f"PHASE: {pod.get('phase', pod.get('status'))}, "
                     f"RESTARTS: {pod.get('restarts', 0)}, READY: {pod.get('ready', False)}"
                 )
         else:
