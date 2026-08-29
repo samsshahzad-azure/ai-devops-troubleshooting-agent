@@ -75,11 +75,11 @@ Added two critical tests to prevent regression:
   - ✓ `kubernetes_use_local_fixtures = False` ← Critical!
   - ✓ `kubernetes_namespace` = requested namespace
 
-**Result:** All 19 tests pass, including new hallucination-prevention tests.
+**Result:** All 27 tests pass, including hallucination-prevention and tool-calling tests.
 
 ## Verification Results
 
-### Unit Tests (19/19 passing)
+### Unit Tests (27/27 passing)
 ```
 ✓ test_agent_uses_groq_client_and_configured_model
 ✓ test_agent_collects_cluster_context_when_enabled

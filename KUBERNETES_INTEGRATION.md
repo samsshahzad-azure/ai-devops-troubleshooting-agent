@@ -28,9 +28,17 @@ The AI DevOps Troubleshooting Agent now includes **read-only Kubernetes integrat
    - Support for both development (local fixtures) and production (real K8s)
 
 4. **`app/agent.py`** - Enhanced troubleshooting agent
-   - Collects cluster context before calling Groq LLM
-   - Formats cluster information for LLM analysis
-   - Backwards compatible with existing API
+   - Supplies an allowlisted read-only tool registry to Groq
+   - Validates and executes bounded tool calls
+   - Formats verified cluster information for LLM analysis
+   - Preserves the existing structured API response
+
+5. **`app/tool_registry.py`** - Fixed tool definitions
+   - Namespace snapshots
+   - Pod information and logs
+   - Pod events
+   - Deployment and service information
+   - No write or interactive Kubernetes operations
 
 ## API Endpoints
 
@@ -53,7 +61,18 @@ POST /troubleshoot
 - `namespace` (optional, default: "default"): Kubernetes namespace to analyze
 - `enable_kubernetes` (optional, default: false): Enable K8s context collection
 
-Response includes LLM analysis with Kubernetes context if enabled.
+Response includes concise structured LLM analysis with Kubernetes context and tool results if enabled:
+
+```json
+{
+   "question": "Why is broken-app failing?",
+   "status": "ImagePullBackOff",
+   "root_cause": "The container image cannot be pulled.",
+   "recommendation": "Verify the image name and registry access."
+}
+```
+
+When enabled, Groq can request allowlisted read-only tools. The agent validates each name and argument set, executes it through the existing Kubernetes data layer, appends the result to the conversation, and stops after a strict maximum number of calls before parsing the final JSON.
 
 ### Get Configuration
 ```
@@ -138,9 +157,11 @@ curl http://127.0.0.1:8000/pod-info?pod_name=my-pod&use_local=true
 - [x] Event logging
 - [x] Local fixtures for development/testing
 - [x] Graceful handling of unavailable clusters
-- [x] Cluster context in LLM prompts
+- [x] Cluster context and verified tool results in LLM prompts
+- [x] Bounded Groq tool-calling loop
+- [x] Strict tool and namespace argument validation
 - [x] Modular architecture for provider support
-- [x] Comprehensive test coverage (17 tests)
+- [x] Comprehensive test coverage (27 tests)
 
 ### 🔒 Security
 - **Read-only only** - No write, create, delete, or patch operations
@@ -166,7 +187,7 @@ Test coverage:
 - Error handling and edge cases
 - Local fixture data access
 
-All 17 tests pass ✅
+All 27 tests pass ✅
 
 ## Future Enhancements
 

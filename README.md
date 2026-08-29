@@ -1,6 +1,6 @@
 # AI DevOps Troubleshooting Agent
 
-A FastAPI service that sends troubleshooting questions to a Groq-hosted LLM. Kubernetes tools are intentionally not connected yet.
+A FastAPI service that uses a Groq-hosted LLM and an allowlisted, read-only Kubernetes tool registry for troubleshooting.
 
 ## Run locally
 
@@ -29,7 +29,9 @@ The response has this shape:
 ```json
 {
   "question": "Why is my Kubernetes pod crashing?",
-  "answer": "...LLM troubleshooting response..."
+  "status": "...",
+  "root_cause": "...",
+  "recommendation": "..."
 }
 ```
 
@@ -43,6 +45,8 @@ python -m pytest
 
 Required environment variable: `GROQ_API_KEY`.
 
-Optional environment variable: `GROQ_MODEL`, which defaults to `llama-3.3-70b-versatile`.
+Optional environment variable: `GROQ_MODEL`, which defaults to the configured Groq model.
+
+When `enable_kubernetes` is true, the agent gives Groq read-only tools for namespace snapshots, pod information, pod logs, pod events, deployments, and services. Tool names and arguments are validated, calls are bounded, and Kubernetes write or interactive operations are not exposed.
 
 If `GROQ_API_KEY` is missing, `/troubleshoot` returns HTTP 503. If the LLM request fails, it returns HTTP 502.

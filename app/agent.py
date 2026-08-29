@@ -1,10 +1,19 @@
 import json
+from types import SimpleNamespace
 from typing import Any
 
 from groq import Groq
 
 from .config import settings
-from .tools import collect_cluster_snapshot
+from .tool_registry import TOOL_DEFINITIONS, validate_tool_arguments
+from .tools import (
+    collect_cluster_snapshot,
+    collect_deployment_information,
+    collect_pod_events,
+    collect_pod_information,
+    collect_pod_logs,
+    collect_service_information,
+)
 
 
 class LLMConfigurationError(RuntimeError):
@@ -13,6 +22,9 @@ class LLMConfigurationError(RuntimeError):
 
 class LLMRequestError(RuntimeError):
     """Raised when the LLM does not return a usable response."""
+
+
+MAX_TOOL_CALLS = 5
 
 
 class TroubleshootingAgent:
@@ -33,36 +45,71 @@ class TroubleshootingAgent:
             cluster_info = self._collect_context()
             cluster_context = self._format_cluster_context(cluster_info)
 
-        try:
-            response = self.client.chat.completions.create(
-                model=settings.groq_model,
-                temperature=0,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a Kubernetes troubleshooting assistant. Return ONLY valid JSON "
-                            "with exactly these string fields: status, root_cause, recommendation. "
-                            "Keep every field concise.\n"
-                            "CRITICAL RULES:\n"
-                            "1. Use only the actual Kubernetes data provided in the cluster context.\n"
-                            "2. Do NOT invent pod names, statuses, events, images, logs, or resources.\n"
-                            "3. If the requested resource is absent, set status to 'Not found' and say so in root_cause.\n"
-                            "4. For ImagePullBackOff or ErrImagePull, state that the container image cannot be pulled.\n"
-                            "5. Do not include diagnostic command lists unless the user explicitly requests commands.\n"
-                            "6. If Kubernetes data is unavailable, state that in status and do not infer a cause."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": self._build_user_message(question, cluster_context),
-                    },
-                ],
-            )
-        except Exception as exc:
-            raise LLMRequestError("The LLM request failed") from exc
+        final_response_instruction = (
+            "by calling submit_diagnosis after reviewing Kubernetes data."
+            if settings.kubernetes_enabled
+            else "as the final assistant message."
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a Kubernetes troubleshooting assistant. Return ONLY valid JSON "
+                    "with exactly these string fields: status, root_cause, recommendation, "
+                    f"{final_response_instruction} "
+                    "Keep every field concise.\n"
+                    "CRITICAL RULES:\n"
+                    "1. Use only the actual Kubernetes data provided in the cluster context or tool results.\n"
+                    "2. Do NOT invent pod names, statuses, events, images, logs, or resources.\n"
+                    "3. If the requested resource is absent, set status to 'Not found' and say so in root_cause.\n"
+                    "4. For ImagePullBackOff or ErrImagePull, state that the container image cannot be pulled.\n"
+                    "5. Do not include diagnostic command lists unless the user explicitly requests commands.\n"
+                    "6. If Kubernetes data is unavailable, state that in status and do not infer a cause."
+                ),
+            },
+            {
+                "role": "user",
+                "content": self._build_user_message(question, cluster_context),
+            },
+        ]
+        tool_calls_used = 0
+        while True:
+            request: dict[str, Any] = {
+                "model": settings.groq_model,
+                "temperature": 0,
+                "messages": messages,
+            }
+            if settings.kubernetes_enabled:
+                request["tools"] = TOOL_DEFINITIONS
+                request["tool_choice"] = "auto"
 
-        answer = response.choices[0].message.content
+            try:
+                response = self.client.chat.completions.create(**request)
+            except Exception as exc:
+                raise LLMRequestError("The LLM request failed") from exc
+
+            message = response.choices[0].message
+            tool_calls = getattr(message, "tool_calls", None) or []
+            if not tool_calls:
+                answer = message.content
+                break
+            if tool_calls_used + len(tool_calls) > MAX_TOOL_CALLS:
+                raise LLMRequestError("The LLM exceeded the maximum number of tool calls")
+
+            messages.append(self._assistant_tool_message(message))
+            for tool_call in tool_calls:
+                result = self._execute_tool_call(tool_call)
+                if tool_call.function.name == "submit_diagnosis":
+                    return result
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": json.dumps(result),
+                    }
+                )
+                tool_calls_used += 1
+
         if not answer:
             raise LLMRequestError("The LLM returned an empty response")
 
@@ -84,16 +131,102 @@ class TroubleshootingAgent:
 
         return {field: structured_answer[field].strip() for field in required_fields}
 
+    def _assistant_tool_message(self, message: Any) -> dict[str, Any]:
+        """Convert an SDK assistant message into a conversation message."""
+        return {
+            "role": "assistant",
+            "content": message.content,
+            "tool_calls": [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.function.name,
+                        "arguments": call.function.arguments,
+                    },
+                }
+                for call in message.tool_calls
+            ],
+        }
+
+    def _execute_tool_call(self, tool_call: Any) -> dict[str, Any]:
+        """Validate and execute one fixed, read-only tool."""
+        tool_name = getattr(tool_call.function, "name", None)
+        try:
+            raw_arguments = json.loads(tool_call.function.arguments)
+            arguments = validate_tool_arguments(tool_name, raw_arguments)
+        except (AttributeError, TypeError, json.JSONDecodeError, ValueError) as exc:
+            raise LLMRequestError("The LLM returned invalid tool arguments") from exc
+
+        if tool_name == "submit_diagnosis":
+            return arguments
+
+        if "namespace" in arguments and arguments["namespace"] != settings.kubernetes_namespace:
+            raise LLMRequestError("The LLM requested a different Kubernetes namespace")
+
+        tool_functions = {
+            "get_namespace_snapshot": collect_cluster_snapshot,
+            "get_pod_information": collect_pod_information,
+            "get_pod_logs": collect_pod_logs,
+            "get_pod_events": collect_pod_events,
+            "get_deployment_information": collect_deployment_information,
+            "get_service_information": collect_service_information,
+        }
+        try:
+            if tool_name == "get_namespace_snapshot":
+                return tool_functions[tool_name](
+                    namespace=arguments["namespace"],
+                    use_local=settings.kubernetes_use_local_fixtures,
+                    kubeconfig_path=settings.kubernetes_kubeconfig_path,
+                )
+            if tool_name == "get_pod_information":
+                return tool_functions[tool_name](
+                    pod_name=arguments["pod_name"],
+                    namespace=arguments["namespace"],
+                    use_local=settings.kubernetes_use_local_fixtures,
+                    kubeconfig_path=settings.kubernetes_kubeconfig_path,
+                )
+            if tool_name == "get_pod_logs":
+                return tool_functions[tool_name](
+                    pod_name=arguments["pod_name"],
+                    namespace=arguments["namespace"],
+                    container=arguments.get("container"),
+                    use_local=settings.kubernetes_use_local_fixtures,
+                    kubeconfig_path=settings.kubernetes_kubeconfig_path,
+                )
+            if tool_name == "get_pod_events":
+                return tool_functions[tool_name](
+                    pod_name=arguments["pod_name"],
+                    namespace=arguments["namespace"],
+                    use_local=settings.kubernetes_use_local_fixtures,
+                    kubeconfig_path=settings.kubernetes_kubeconfig_path,
+                )
+            return tool_functions[tool_name](
+                namespace=arguments["namespace"],
+                **{
+                    "deployment_name": arguments["deployment_name"]
+                    if tool_name == "get_deployment_information"
+                    else arguments["service_name"]
+                },
+                use_local=settings.kubernetes_use_local_fixtures,
+                kubeconfig_path=settings.kubernetes_kubeconfig_path,
+            )
+        except Exception as exc:
+            raise LLMRequestError("The Kubernetes tool failed") from exc
+
     def _collect_context(self) -> dict[str, Any]:
         """Collect cluster information for context.
         
         Returns:
             Dictionary with cluster snapshot information.
         """
-        return collect_cluster_snapshot(
-            namespace=settings.kubernetes_namespace,
-            use_local=settings.kubernetes_use_local_fixtures,
-            kubeconfig_path=settings.kubernetes_kubeconfig_path,
+        return self._execute_tool_call(
+            SimpleNamespace(
+                function=SimpleNamespace(
+                    name="get_namespace_snapshot",
+                    arguments=json.dumps({"namespace": settings.kubernetes_namespace}),
+                )
+            )
         )
 
     def _format_cluster_context(self, cluster_info: dict[str, Any]) -> str:

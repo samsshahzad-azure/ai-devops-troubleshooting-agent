@@ -6,7 +6,7 @@
 # Run tests
 pytest tests/ -v
 
-# All 17 tests should pass ✅
+# All 27 tests should pass ✅
 ```
 
 ## 2. Test Local Fixtures (No K8s Required)
@@ -133,7 +133,9 @@ curl -X POST http://127.0.0.1:8000/troubleshoot \
 # Response:
 # {
 #   "question": "...",
-#   "answer": "LLM analysis with cluster context"
+#   "status": "ImagePullBackOff",
+#   "root_cause": "The container image cannot be pulled.",
+#   "recommendation": "Verify the image name and registry access."
 # }
 ```
 
@@ -241,7 +243,7 @@ $ curl http://127.0.0.1:8000/cluster-info?use_local=true
 $ curl -X POST http://127.0.0.1:8000/troubleshoot \
   -H "Content-Type: application/json" \
   -d '{"question":"Why is my pod crashing?"}'
-{"question":"...","answer":"..."}
+{"question":"...","status":"...","root_cause":"...","recommendation":"..."}
 ```
 
 ---

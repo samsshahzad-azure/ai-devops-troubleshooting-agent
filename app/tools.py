@@ -155,3 +155,98 @@ def collect_pod_information(
     reader = KubernetesReader(kubeconfig_path=kubeconfig_path)
     return reader.collect_pod_info(pod_name, namespace)
 
+
+def collect_pod_logs(
+    pod_name: str,
+    namespace: str = "default",
+    container: Optional[str] = None,
+    use_local: bool = True,
+    kubeconfig_path: Optional[str] = None,
+) -> dict[str, Any]:
+    """Collect logs for one named pod through the read-only provider."""
+    if use_local:
+        pod = next(
+            (pod for pod in LOCAL_CLUSTER["pods"] if pod["name"] == pod_name),
+            None,
+        )
+        return {
+            "status": "success" if pod else "not_found",
+            "pod_name": pod_name,
+            "namespace": namespace,
+            "logs": LOCAL_CLUSTER["logs"] if pod else {},
+        }
+
+    info = collect_pod_information(
+        pod_name=pod_name,
+        namespace=namespace,
+        use_local=False,
+        kubeconfig_path=kubeconfig_path,
+    )
+    return {
+        "status": info.get("status", "error"),
+        "pod_name": pod_name,
+        "namespace": namespace,
+        "logs": info.get("logs", {}),
+        "error": info.get("error"),
+    }
+
+
+def collect_pod_events(
+    pod_name: str,
+    namespace: str = "default",
+    use_local: bool = True,
+    kubeconfig_path: Optional[str] = None,
+) -> dict[str, Any]:
+    """Collect events for one named pod through the read-only provider."""
+    snapshot = collect_cluster_snapshot(
+        namespace=namespace,
+        use_local=use_local,
+        kubeconfig_path=kubeconfig_path,
+    )
+    if snapshot.get("status") in {"unavailable", "error"}:
+        return snapshot
+    events = [event for event in snapshot.get("events", []) if event.get("name") == pod_name]
+    return {"status": "success", "namespace": namespace, "pod_name": pod_name, "events": events}
+
+
+def collect_deployment_information(
+    deployment_name: str,
+    namespace: str = "default",
+    use_local: bool = True,
+    kubeconfig_path: Optional[str] = None,
+) -> dict[str, Any]:
+    """Collect one deployment from a namespace snapshot."""
+    snapshot = collect_cluster_snapshot(namespace, use_local, kubeconfig_path)
+    if snapshot.get("status") in {"unavailable", "error"}:
+        return snapshot
+    deployment = next(
+        (item for item in snapshot.get("deployments", []) if item.get("name") == deployment_name),
+        None,
+    )
+    return {
+        "status": "success" if deployment else "not_found",
+        "namespace": namespace,
+        "deployment": deployment,
+    }
+
+
+def collect_service_information(
+    service_name: str,
+    namespace: str = "default",
+    use_local: bool = True,
+    kubeconfig_path: Optional[str] = None,
+) -> dict[str, Any]:
+    """Collect one service from a namespace snapshot."""
+    snapshot = collect_cluster_snapshot(namespace, use_local, kubeconfig_path)
+    if snapshot.get("status") in {"unavailable", "error"}:
+        return snapshot
+    service = next(
+        (item for item in snapshot.get("services", []) if item.get("name") == service_name),
+        None,
+    )
+    return {
+        "status": "success" if service else "not_found",
+        "namespace": namespace,
+        "service": service,
+    }
+
