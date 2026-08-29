@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: ai-devops-troubleshooting-agent
+Version: 0.1.0
+Summary: A local-first AI assistant for Kubernetes troubleshooting.
+Requires-Python: >=3.11
+Requires-Dist: fastapi<1.0,>=0.115
+Requires-Dist: httpx<1.0,>=0.27
+Requires-Dist: groq<1.0,>=0.11
+Requires-Dist: pydantic-settings<3.0,>=2.6
+Requires-Dist: uvicorn[standard]<1.0,>=0.32
+Requires-Dist: kubernetes<31.0,>=30.0
+Provides-Extra: dev
+Requires-Dist: pytest<9.0,>=8.3; extra == "dev"

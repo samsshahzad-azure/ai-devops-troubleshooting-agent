@@ -1,0 +1,67 @@
+---
+# Kubernetes test namespace and broken app deployment for AI DevOps Troubleshooting Agent
+# This file is safe to apply - it only creates a new namespace and test resources
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-agent-test
+  labels:
+    purpose: testing
+    app: ai-devops-troubleshooting-agent
+
+---
+# Test deployment with intentionally nonexistent image
+# This will enter ImagePullBackOff status for testing the troubleshooting agent
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broken-app
+  namespace: ai-agent-test
+  labels:
+    app: broken-app
+    version: test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: broken-app
+  template:
+    metadata:
+      labels:
+        app: broken-app
+        version: test
+      annotations:
+        description: "Test pod for AI DevOps Troubleshooting Agent - Intentionally uses nonexistent image"
+    spec:
+      containers:
+      - name: broken-container
+        # Intentionally nonexistent image to trigger ImagePullBackOff
+        image: nonexistent-registry.example.com/nonexistent-image:nonexistent-tag
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      # Pull secret for private registry (not needed for this test, but good practice)
+      imagePullSecrets:
+      - name: docker-secret
+      restartPolicy: Always
